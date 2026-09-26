@@ -1,0 +1,31 @@
+# Only explicitly approved source files belong in this repository.
+/*
+!/.gitignore
+!/.gitattributes
+!/.python-version
+!/README.md
+!/compress_videos.py
+!/terminal_menu.py
+!/local_settings.py
+!/test_compressor.py
+!/test_terminal_menu.py
+!/start_windows.bat
+!/開始轉檔.command
+!/.github/
+
+# Defense in depth: never commit media, local configuration, caches or logs.
+*.mov
+*.MOV
+*.mp4
+*.MP4
+*.mkv
+*.avi
+*.webm
+*.log
+settings.local.json
+.uv-cache/
+.venv/
+__pycache__/
+.DS_Store
+compressed/
+samples/
