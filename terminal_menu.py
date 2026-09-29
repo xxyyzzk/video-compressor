@@ -5,6 +5,7 @@
 """互動式 Terminal 選單；沿用 compress_videos.py 進行實際編碼。"""
 
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,63 @@ SOURCE = DEFAULT_SOURCE
 OUTPUT = DEFAULT_OUTPUT or DEFAULT_SOURCE / "compressed"
 CACHE = BASE / ".uv-cache"
 EXTENSIONS = {".mov", ".mp4", ".mkv", ".m4v", ".avi", ".webm", ".mts"}
+
+
+def pick_folder():
+    """Use native desktop dialogs without requiring Tk in uv's Python build."""
+    if sys.platform == "darwin":
+        script = '''try
+return POSIX path of (choose folder with prompt "選擇要轉檔的影片資料夾")
+on error number -128
+return ""
+end try'''
+        command = ["/usr/bin/osascript", "-e", script]
+    elif os.name == "nt":
+        script = '''$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+Add-Type -AssemblyName System.Windows.Forms
+[System.Windows.Forms.Application]::EnableVisualStyles()
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = '選擇要轉檔的影片資料夾'
+$dialog.ShowNewFolderButton = $false
+try {
+    if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+        [Console]::WriteLine($dialog.SelectedPath)
+    }
+} finally { $dialog.Dispose() }
+'''
+        encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        command = ["powershell.exe", "-NoProfile", "-STA", "-EncodedCommand", encoded]
+    else:
+        raise RuntimeError("這個系統沒有內建的資料夾選擇介面。")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    except OSError as error:
+        raise RuntimeError(f"無法開啟資料夾選擇視窗：{error}") from error
+    if result.returncode:
+        raise RuntimeError("無法開啟資料夾選擇視窗，請改用貼上路徑。")
+    value = result.stdout.rstrip("\r\n")
+    return Path(value).resolve() if value else None
+
+
+def select_source(output=None, text_only=False):
+    """Return False on cancellation; never silently use an old folder."""
+    if not text_only:
+        print("請在跳出的視窗選擇影片資料夾……", flush=True)
+        try:
+            selected = pick_folder()
+        except RuntimeError as error:
+            print(error)
+        else:
+            if selected is None:
+                return False
+            configure(selected, output)
+            return True
+    raw = input("貼上或拖入影片／資料夾路徑（Enter 取消）：").strip()
+    if not raw:
+        return False
+    configure(parse_path(raw), output)
+    return True
 
 
 def parse_path(value):
@@ -172,20 +230,19 @@ def menu():
         for index, path in enumerate(files, 1):
             print(f"{index:2}. [{status(path)}] {path.name}")
         print("\nA. 依序轉換所有待轉檔影片")
-        print("S. 更換來源影片或資料夾（可貼上或拖入路徑）")
+        print("S. 開啟資料夾選擇視窗    P. 貼上影片或資料夾路徑")
         print("R. 更新狀態    O. 開啟輸出資料夾    Q. 離開")
-        choice = input("\n輸入影片編號，或 A / S / R / O / Q：").strip().lower()
+        choice = input("\n輸入影片編號，或 A / S / P / R / O / Q：").strip().lower()
         if choice == "q":
             return 0
         if choice == "r":
             continue
-        if choice == "s":
-            raw = input("貼上或拖入影片／資料夾路徑（Enter 取消）：").strip()
-            if raw:
-                try:
-                    configure(parse_path(raw))
-                except ValueError as error:
-                    print(f"無法更換來源：{error}")
+        if choice in ("s", "p"):
+            try:
+                if not select_source(text_only=choice == "p"):
+                    print("已取消選擇，保留目前來源。")
+            except ValueError as error:
+                print(f"無法更換來源：{error}")
             continue
         if choice == "o":
             OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -235,10 +292,11 @@ def main():
     parser = argparse.ArgumentParser(description="MOV / MP4 互動轉檔選單，統一轉成 MP4 / H.265 / CRF 23。")
     parser.add_argument("input", nargs="?", type=Path, help="可選：來源影片或資料夾")
     parser.add_argument("-o", "--output", type=Path, help="可選：輸出資料夾")
+    parser.add_argument("--no-dialog", action="store_true", help="啟動時改用輸入路徑，不跳出視窗")
     args = parser.parse_args()
     try:
-        if args.input is not None or args.output is not None:
-            configure(args.input or DEFAULT_SOURCE, args.output)
+        if args.input is not None:
+            configure(args.input, args.output)
     except ValueError as error:
         parser.error(str(error))
     # Persistent lock file; flock releases automatically when the process exits.
@@ -249,6 +307,15 @@ def main():
             print("已有轉檔選單開啟，請使用原本的 Terminal 視窗。")
             return 1
         try:
+            if args.input is None:
+                try:
+                    selected = select_source(args.output, text_only=args.no_dialog)
+                except ValueError as error:
+                    print(f"無法選擇來源：{error}")
+                    return 1
+                if not selected:
+                    print("已取消，未開始轉檔。")
+                    return 0
             return menu()
         except (KeyboardInterrupt, EOFError):
             print("\n已離開選單。")

@@ -33,7 +33,7 @@ class MenuTests(unittest.TestCase):
                 self.assertEqual(menu.parse_path(str(first)), first)
                 if os.name != "nt":
                     self.assertEqual(menu.parse_path(shlex.quote(str(first))), first)
-                with patch("builtins.input", side_effect=["s", '"' + str(mp4) + '"', "1", "q"]), \
+                with patch("builtins.input", side_effect=["p", '"' + str(mp4) + '"', "1", "q"]), \
                         patch.object(menu, "run_one", return_value=0) as run, \
                         contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(menu.menu(), 0)
@@ -44,6 +44,38 @@ class MenuTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     menu.configure(root / "missing.mp4")
                 self.assertEqual(menu.SOURCE, second)
+
+    def test_startup_selection_cancel_and_explicit_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with patch.multiple(menu, BASE=root, SOURCE=menu.SOURCE, OUTPUT=menu.OUTPUT), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                with patch.object(sys, "argv", ["terminal_menu.py"]), \
+                        patch.object(menu, "pick_folder", return_value=root), \
+                        patch.object(menu, "menu", return_value=0) as shown:
+                    self.assertEqual(menu.main(), 0)
+                    shown.assert_called_once()
+                    self.assertEqual(menu.SOURCE, root)
+                with patch.object(sys, "argv", ["terminal_menu.py"]), \
+                        patch.object(menu, "pick_folder", return_value=None), \
+                        patch.object(menu, "menu") as shown:
+                    self.assertEqual(menu.main(), 0)
+                    shown.assert_not_called()
+                with patch.object(sys, "argv", ["terminal_menu.py", str(root)]), \
+                        patch.object(menu, "pick_folder") as picker, \
+                        patch.object(menu, "menu", return_value=0):
+                    self.assertEqual(menu.main(), 0)
+                    picker.assert_not_called()
+
+    def test_unavailable_dialog_falls_back_to_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with patch.multiple(menu, SOURCE=menu.SOURCE, OUTPUT=menu.OUTPUT), \
+                    patch.object(menu, "pick_folder", side_effect=RuntimeError("No desktop")), \
+                    patch("builtins.input", return_value=str(root)), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertTrue(menu.select_source())
+                self.assertEqual(menu.SOURCE, root)
 
     def test_lock_across_processes_and_release(self):
         with tempfile.TemporaryDirectory() as directory:
